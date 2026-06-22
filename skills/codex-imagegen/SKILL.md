@@ -99,11 +99,18 @@ RAMP_EVERY = int(os.environ.get("RAMP_EVERY", "5"))   # 성공 N건마다 워커
 CODEX_IMG = Path.home() / ".codex" / "generated_images"
 
 def auto_target(todo):
-    """작업 수 → 목표 워커. CPU 코어로 캡(CLI 스폰은 프로세스가 무거움). MAX로 override."""
+    """작업 수 → 목표 워커. codex exec는 I/O 바운드(이미지 API 대기 ~30-45s)라 CPU가
+    아니라 RAM·계정(250 IPM)이 한도 → 여유 RAM 기반 캡(HARD_CAP 천장 32). MAX로 직접 고정.
+    예: 여유 6GB·0.4GB/proc → ~15. 큰 머신이면 HARD_CAP까지. 계정은 보통 헤드룸 큼."""
     cap = int(os.environ.get("MAX", "0"))
     if not cap:
-        cpu = os.cpu_count() or 4
-        cap = min(16, max(2, cpu - 1))
+        try:
+            free_gb = os.sysconf("SC_AVPHYS_PAGES") * os.sysconf("SC_PAGE_SIZE") / 1e9
+            per = float(os.environ.get("RAM_PER_PROC_GB", "0.4"))
+            cap = max(2, int(free_gb / per))
+        except (ValueError, OSError, AttributeError):
+            cap = (os.cpu_count() or 4) * 2          # 비리눅스 폴백(I/O 바운드라 코어×2)
+        cap = min(int(os.environ.get("HARD_CAP", "32")), cap)
     return max(1, min(todo, cap))
 
 class AutoScaler:
@@ -152,10 +159,14 @@ def _is_throttle(err):
 def run_one(item, scaler):
     pid = item["id"]; out = OUTDIR / item["output_path"]
     if out.exists(): return (pid, "skip", 0)   # resume
-    instr = (f"Use $imagegen to generate ONE image.\n"
-             f"Aspect ratio: {item.get('ar','1:1')}\n"
-             f"Size: {item.get('size','1024x1536')}\n"
-             f"Prompt: {item['prompt']}\n"
+    instr = (f"Use $imagegen to generate ONE image.
+"
+             f"Aspect ratio: {item.get('ar','1:1')}
+"
+             f"Size: {item.get('size','1024x1536')}
+"
+             f"Prompt: {item['prompt']}
+"
              f"After generation, do NOT run any shell commands. Just generate and end your turn.")
     with scaler:                               # 동시 실행 슬롯(천장은 스케일러가 조절)
         before = time.time() - 1
@@ -185,7 +196,7 @@ def main():
     if PARALLEL.isdigit():
         target = max(1, int(PARALLEL)); mode = f"manual={target}"
     else:
-        target = auto_target(todo); mode = f"auto→{target}(cpu={os.cpu_count()})"
+        target = auto_target(todo); mode = f"auto→{target}(RAM기반)"
     if not todo: print("[done] 처리할 작업 없음."); return 0
     scaler = AutoScaler(target)
     print(f"[spawn] todo={todo} workers={mode} start={scaler.live()} ramp=+1/{RAMP_EVERY}ok", flush=True)
@@ -201,7 +212,8 @@ def main():
                     print(f"[progress] {ok}/{todo} ok · {rate:.1f}/min · 워커 {scaler.live()}/{target}", flush=True)
             elif status!="skip":
                 fail+=1; print(f"[fail#{fail}] {pid} ({el:.0f}s) {status}", flush=True)
-    print(f"\n=== done: {ok} ok / {fail} fail / {(time.time()-t0)/60:.1f}min · peak 워커 {scaler.live()}/{target} ===")
+    print(f"
+=== done: {ok} ok / {fail} fail / {(time.time()-t0)/60:.1f}min · peak 워커 {scaler.live()}/{target} ===")
     return 0 if fail==0 else 1
 
 if __name__=="__main__":
