@@ -23,7 +23,7 @@ Codex로 이미지 600장을 뽑거나 파일 수십 개에 같은 작업을 돌
 | **[codex-imagegen](skills/codex-imagegen/SKILL.md)** | gpt-image-2 이미지 대량생성 | codex가 `~/.codex/generated_images/`에 떨군 PNG를 회수 — **레이스 있음 → `claimed` 락으로 해결** |
 | **[codex-spawn](skills/codex-spawn/SKILL.md)** | 코드 수정·분석·요약·리뷰 등 임의 작업 | `-o`(output-last-message)로 작업별 파일에 직접 받음 — **레이스 없음** |
 
-둘 다 골격은 같다. `codex exec`를 `ThreadPoolExecutor(max_workers=PARALLEL)`로 백그라운드에 띄우고, 처리량은 `PARALLEL` 하나로 정한다. 차이는 결과를 어떻게 회수하느냐다.
+둘 다 골격은 같다. `codex exec`를 워커 풀로 백그라운드에 띄우고, 워커 수는 **작업 수에 맞춰 자동 스케일**(헬시하면 상한까지 램프업)된다. 차이는 결과를 어떻게 회수하느냐다.
 
 ## 빠른 시작
 
@@ -44,18 +44,18 @@ ls -lt ~/.codex/generated_images/**/ig_*.png | head -3
 임의 작업 (`tasks.jsonl` = 한 줄당 `{id, prompt, cwd?, schema?}`):
 
 ```bash
-PARALLEL=4 TASKS=examples/tasks.jsonl OUTDIR=./out SANDBOX=read-only \
-  python3 runners/codex_spawn_runner.py
+TASKS=examples/tasks.jsonl OUTDIR=./out SANDBOX=read-only \
+  python3 runners/codex_spawn_runner.py        # PARALLEL=auto 기본
 ```
 
 이미지 (`manifest.jsonl` = 한 줄당 `{id, prompt, ar, size, output_path}`):
 
 ```bash
-PARALLEL=3 PROMPTS=examples/manifest.jsonl OUTDIR=./out \
-  python3 runners/codex_imagegen_runner.py
+PROMPTS=examples/manifest.jsonl OUTDIR=./out \
+  python3 runners/codex_imagegen_runner.py     # PARALLEL=auto 기본
 ```
 
-Codex CLI에 로그인돼 있으면 바로 된다. 스폰 수(`PARALLEL`)는 **3~6에서 시작**해, 머신 부하와 429를 보며 올린다. 한도는 ChatGPT 계정 단위라 스폰을 늘려도 계정 rate limit은 복제되지 않는다.
+**스폰 수는 기본 `auto`** — 작업 수가 늘면 워커를 알아서 더 띄우고(`min(작업수, MAX)`, `MAX`=`min(16, CPU-1)`), `START`(기본 3)에서 시작해 헬시하면 성공 `RAMP_EVERY`(5)건마다 +1로 램프업한다. **429/rate limit이 보이면 성장이 멈춘다.** 수동으로 박으려면 `PARALLEL=8`. 한도는 ChatGPT 계정 단위라 스폰을 늘려도 계정 rate limit(250 IPM)은 복제되지 않는다.
 
 ## 스킬로 설치
 

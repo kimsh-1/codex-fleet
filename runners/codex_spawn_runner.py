@@ -1,27 +1,62 @@
 #!/usr/bin/env python3
-# codex_spawn_runner.py — 깡코덱스 codex exec를 PARALLEL개 병렬 스폰, 결과를 파일로 회수
-# 실행: PARALLEL=4 TASKS=tasks.jsonl OUTDIR=./out SANDBOX=read-only python3 codex_spawn_runner.py
-import json, os, subprocess, sys, time
+# codex_spawn_runner.py — 깡코덱스 codex exec를 자동 스케일링 병렬 스폰, 결과를 파일로 회수
+# 실행: TASKS=tasks.jsonl OUTDIR=./out SANDBOX=read-only python3 codex_spawn_runner.py
+#   PARALLEL=auto(기본) : 작업 수에 맞춰 워커 자동 산정 + 헬시하면 상한까지 램프업
+#   PARALLEL=4          : 수동 고정.   MAX=12 : 자동 상한 override.   START=3 : 시작 워커.
+import json, os, subprocess, sys, time, threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 TASKS    = Path(os.environ.get("TASKS", "tasks.jsonl"))
 OUTDIR   = Path(os.environ.get("OUTDIR", "./out"))
-PARALLEL = int(os.environ.get("PARALLEL", "4"))        # ← 스폰 수 손잡이
+PARALLEL = os.environ.get("PARALLEL", "auto")
 TIMEOUT  = int(os.environ.get("TIMEOUT", "600"))       # 단일 작업 상한(초)
 SANDBOX  = os.environ.get("SANDBOX", "read-only")      # read-only|workspace-write|danger-full-access
 MODEL    = os.environ.get("MODEL", "")                 # 비우면 codex 기본
 BYPASS   = os.environ.get("BYPASS", "0") == "1"        # 1이면 승인·샌드박스 전부 생략
+RAMP_EVERY = int(os.environ.get("RAMP_EVERY", "5"))    # 성공 N건마다 워커 +1
 
-def run_one(item):
+def auto_target(todo):
+    """작업 수 → 목표 워커. CPU 코어로 캡(CLI 스폰은 프로세스가 무거움). MAX로 override."""
+    cap = int(os.environ.get("MAX", "0"))
+    if not cap:
+        cpu = os.cpu_count() or 4
+        cap = min(16, max(2, cpu - 1))
+    return max(1, min(todo, cap))
+
+class AutoScaler:
+    """start 워커로 시작해 헬시하면 RAMP_EVERY 성공마다 +1, target까지. 스로틀 시 성장 정지."""
+    def __init__(self, target):
+        self.target = target
+        self.permits = max(1, min(int(os.environ.get("START", "3")), target))
+        self.sem = threading.Semaphore(self.permits)
+        self.lock = threading.Lock()
+        self.ok = 0
+    def __enter__(self): self.sem.acquire(); return self
+    def __exit__(self, *a): self.sem.release()
+    def live(self): return self.permits
+    def success(self):
+        with self.lock:
+            if self.permits < self.target:
+                self.ok += 1
+                if self.ok >= RAMP_EVERY:
+                    self.ok = 0; self.permits += 1; self.sem.release()
+    def throttle(self):
+        with self.lock:
+            self.ok = 0
+
+def _is_throttle(err):
+    e = (err or "").lower()
+    return "429" in e or "rate limit" in e or "too many requests" in e
+
+def run_one(item, scaler):
     tid = str(item["id"])
     schema = item.get("schema")
     out = OUTDIR / (f"{tid}.json" if schema else f"{tid}.md")
     if out.exists():                                   # resume
         return (tid, "skip", 0)
     out.parent.mkdir(parents=True, exist_ok=True)
-    cmd = ["codex", "exec", "--skip-git-repo-check", "--ephemeral",
-           "-o", str(out)]
+    cmd = ["codex", "exec", "--skip-git-repo-check", "--ephemeral", "-o", str(out)]
     if BYPASS:
         cmd.append("--dangerously-bypass-approvals-and-sandbox")
     else:
@@ -34,14 +69,17 @@ def run_one(item):
         sp = OUTDIR / f".{tid}.schema.json"
         sp.write_text(json.dumps(schema)); cmd += ["--output-schema", str(sp)]
     cmd.append(item["prompt"])
-    t0 = time.time()
-    try:
-        r = subprocess.run(cmd, stdin=subprocess.DEVNULL,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                           timeout=TIMEOUT, text=True)
-    except subprocess.TimeoutExpired:
-        return (tid, "timeout", time.time()-t0)
+    with scaler:                                       # 동시 실행 슬롯(천장은 스케일러가 조절)
+        t0 = time.time()
+        try:
+            r = subprocess.run(cmd, stdin=subprocess.DEVNULL,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                               timeout=TIMEOUT, text=True)
+        except subprocess.TimeoutExpired:
+            return (tid, "timeout", time.time()-t0)
+        if _is_throttle(r.stderr): scaler.throttle()
     if out.exists() and out.stat().st_size > 0:
+        scaler.success()
         return (tid, "ok", time.time()-t0)
     err = (r.stderr or "").strip().splitlines()[-1:] or [""]
     return (tid, f"fail({err[0][:100]})", time.time()-t0)
@@ -50,17 +88,24 @@ def main():
     items = [json.loads(l) for l in TASKS.read_text().splitlines() if l.strip()]
     items = [it for it in items
              if not (OUTDIR/(f"{it['id']}.json" if it.get('schema') else f"{it['id']}.md")).exists()]
-    print(f"[spawn] todo={len(items)} PARALLEL={PARALLEL} sandbox={'bypass' if BYPASS else SANDBOX}", flush=True)
+    todo = len(items)
+    if PARALLEL.isdigit():
+        target = max(1, int(PARALLEL)); mode = f"manual={target}"
+    else:
+        target = auto_target(todo); mode = f"auto→{target}(cpu={os.cpu_count()})"
+    if not todo: print("[done] 처리할 작업 없음."); return 0
+    scaler = AutoScaler(target)
+    print(f"[spawn] todo={todo} workers={mode} start={scaler.live()} sandbox={'bypass' if BYPASS else SANDBOX}", flush=True)
     ok=fail=0; t0=time.time()
-    with ThreadPoolExecutor(max_workers=PARALLEL) as ex:
-        futs={ex.submit(run_one,it):it["id"] for it in items}
+    with ThreadPoolExecutor(max_workers=target) as ex:
+        futs={ex.submit(run_one,it,scaler):it["id"] for it in items}
         for f in as_completed(futs):
             tid,status,el=f.result()
             if status=="ok":
-                ok+=1; print(f"[ok] {tid} ({el:.0f}s)", flush=True)
+                ok+=1; print(f"[ok] {tid} ({el:.0f}s) · 워커 {scaler.live()}/{target}", flush=True)
             elif status!="skip":
                 fail+=1; print(f"[fail#{fail}] {tid} ({el:.0f}s) {status}", flush=True)
-    print(f"\n=== done: {ok} ok / {fail} fail / {(time.time()-t0)/60:.1f}min ===")
+    print(f"\n=== done: {ok} ok / {fail} fail / {(time.time()-t0)/60:.1f}min · peak 워커 {scaler.live()}/{target} ===")
     return 0 if fail==0 else 1
 
 if __name__=="__main__":
