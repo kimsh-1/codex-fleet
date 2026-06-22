@@ -187,8 +187,7 @@ def main():
                 ok+=1; print(f"[ok] {tid} ({el:.0f}s) · 워커 {scaler.live()}/{target}", flush=True)
             elif status!="skip":
                 fail+=1; print(f"[fail#{fail}] {tid} ({el:.0f}s) {status}", flush=True)
-    print(f"
-=== done: {ok} ok / {fail} fail / {(time.time()-t0)/60:.1f}min · peak 워커 {scaler.live()}/{target} ===")
+    print(f"\n=== done: {ok} ok / {fail} fail / {(time.time()-t0)/60:.1f}min · peak 워커 {scaler.live()}/{target} ===")
     return 0 if fail==0 else 1
 
 if __name__=="__main__":

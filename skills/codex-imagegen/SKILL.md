@@ -159,14 +159,10 @@ def _is_throttle(err):
 def run_one(item, scaler):
     pid = item["id"]; out = OUTDIR / item["output_path"]
     if out.exists(): return (pid, "skip", 0)   # resume
-    instr = (f"Use $imagegen to generate ONE image.
-"
-             f"Aspect ratio: {item.get('ar','1:1')}
-"
-             f"Size: {item.get('size','1024x1536')}
-"
-             f"Prompt: {item['prompt']}
-"
+    instr = (f"Use $imagegen to generate ONE image.\n"
+             f"Aspect ratio: {item.get('ar','1:1')}\n"
+             f"Size: {item.get('size','1024x1536')}\n"
+             f"Prompt: {item['prompt']}\n"
              f"After generation, do NOT run any shell commands. Just generate and end your turn.")
     with scaler:                               # 동시 실행 슬롯(천장은 스케일러가 조절)
         before = time.time() - 1
@@ -212,8 +208,7 @@ def main():
                     print(f"[progress] {ok}/{todo} ok · {rate:.1f}/min · 워커 {scaler.live()}/{target}", flush=True)
             elif status!="skip":
                 fail+=1; print(f"[fail#{fail}] {pid} ({el:.0f}s) {status}", flush=True)
-    print(f"
-=== done: {ok} ok / {fail} fail / {(time.time()-t0)/60:.1f}min · peak 워커 {scaler.live()}/{target} ===")
+    print(f"\n=== done: {ok} ok / {fail} fail / {(time.time()-t0)/60:.1f}min · peak 워커 {scaler.live()}/{target} ===")
     return 0 if fail==0 else 1
 
 if __name__=="__main__":
