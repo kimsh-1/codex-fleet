@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>codex-fleet — Codex 워커를 함대처럼 양산하는 Claude Code 스킬</title>
+<meta name="description" content="codex exec 프로세스를 백그라운드로 N개 병렬 스폰해 이미지든 임의 작업이든 대량으로 뽑아내는 Claude Code 스킬 모음." />
+<style>
+  :root{
+    --bg:#0a0e1a; --panel:#111726; --line:#1e2740; --ink:#e8edf7;
+    --dim:#8a97b5; --cyan:#37e0d8; --gold:#f0c674; --rose:#f07a8c;
+    --mono:'SFMono-Regular',ui-monospace,'JetBrains Mono',Menlo,Consolas,monospace;
+    --sans:'Pretendard',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,system-ui,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.65;
+    -webkit-font-smoothing:antialiased}
+  a{color:var(--cyan);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .wrap{max-width:980px;margin:0 auto;padding:0 24px}
+  code,kbd{font-family:var(--mono);font-size:.92em}
+
+  /* nav */
+  nav{position:sticky;top:0;z-index:20;background:rgba(10,14,26,.82);
+    backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+  nav .wrap{display:flex;align-items:center;justify-content:space-between;height:60px}
+  .brand{font-family:var(--mono);font-weight:700;letter-spacing:-.02em;font-size:1.05rem}
+  .brand b{color:var(--cyan)}
+  .nav-links{display:flex;gap:22px;font-size:.9rem}
+  .nav-links a{color:var(--dim)}
+  .nav-links a:hover{color:var(--ink);text-decoration:none}
+
+  /* hero */
+  header{padding:72px 0 36px;text-align:center;border-bottom:1px solid var(--line)}
+  .eyebrow{font-family:var(--mono);color:var(--cyan);font-size:.8rem;letter-spacing:.18em;
+    text-transform:uppercase;margin-bottom:18px}
+  h1{font-size:clamp(2.1rem,5.5vw,3.4rem);font-weight:800;letter-spacing:-.03em;line-height:1.1}
+  h1 .grad{background:linear-gradient(100deg,var(--cyan),var(--gold));
+    -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+  .sub{max-width:640px;margin:22px auto 0;color:var(--dim);font-size:1.12rem}
+  .cta{display:flex;gap:14px;justify-content:center;margin-top:32px;flex-wrap:wrap}
+  .btn{font-family:var(--mono);font-size:.9rem;padding:12px 22px;border-radius:10px;
+    border:1px solid var(--line);transition:.15s}
+  .btn.primary{background:var(--cyan);color:#05221f;border-color:var(--cyan);font-weight:700}
+  .btn.primary:hover{filter:brightness(1.08);text-decoration:none}
+  .btn.ghost{color:var(--ink)}
+  .btn.ghost:hover{border-color:var(--cyan);text-decoration:none}
+
+  /* stage = the "video" */
+  .stage-sec{padding:44px 0 60px;border-bottom:1px solid var(--line)}
+  .stage-card{background:var(--panel);border:1px solid var(--line);border-radius:16px;
+    overflow:hidden;box-shadow:0 24px 60px -28px rgba(0,0,0,.7)}
+  .stage-top{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid var(--line)}
+  .dot{width:11px;height:11px;border-radius:50%}
+  .stage-title{margin-left:8px;font-family:var(--mono);font-size:.82rem;color:var(--dim)}
+  canvas{display:block;width:100%;height:auto;background:
+    radial-gradient(1200px 400px at 18% 30%,rgba(55,224,216,.06),transparent 60%)}
+  .controls{display:flex;align-items:center;gap:20px;flex-wrap:wrap;
+    padding:16px 20px;border-top:1px solid var(--line);font-family:var(--mono);font-size:.86rem}
+  .controls label{color:var(--dim)}
+  .controls input[type=range]{accent-color:var(--cyan);width:200px;vertical-align:middle}
+  .pill{background:#0c1322;border:1px solid var(--line);border-radius:999px;padding:5px 12px}
+  .pill b{color:var(--cyan)}
+  .pill.gold b{color:var(--gold)}
+
+  /* sections */
+  section{padding:60px 0;border-bottom:1px solid var(--line)}
+  h2{font-size:1.7rem;letter-spacing:-.02em;margin-bottom:8px}
+  .lead{color:var(--dim);margin-bottom:30px;max-width:680px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+  @media(max-width:720px){.grid2{grid-template-columns:1fr}}
+  .skill{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:24px}
+  .skill h3{font-family:var(--mono);font-size:1.05rem;margin-bottom:6px}
+  .skill h3 .tag{color:var(--cyan)}
+  .skill p{color:var(--dim);font-size:.96rem;margin-bottom:14px}
+  .skill .meta{font-family:var(--mono);font-size:.8rem;color:var(--dim);
+    border-top:1px solid var(--line);padding-top:12px}
+  pre{background:#0c1322;border:1px solid var(--line);border-radius:12px;padding:18px 20px;
+    overflow-x:auto;font-family:var(--mono);font-size:.86rem;line-height:1.7;color:#cdd6ee}
+  pre .c{color:var(--dim)}
+  pre .k{color:var(--gold)}
+  pre .s{color:var(--cyan)}
+  ul.traps{list-style:none;display:grid;gap:14px}
+  ul.traps li{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--rose);
+    border-radius:10px;padding:14px 18px}
+  ul.traps li b{color:var(--rose);font-family:var(--mono);font-size:.9rem}
+  ul.traps li span{color:var(--dim);font-size:.94rem}
+  footer{padding:48px 0 64px;text-align:center;color:var(--dim);font-size:.9rem}
+  footer .brand{display:block;margin-bottom:10px}
+</style>
+</head>
+<body>
+
+<nav><div class="wrap">
+  <span class="brand">codex<b>·</b>fleet</span>
+  <span class="nav-links">
+    <a href="#how">동작</a><a href="#skills">스킬</a><a href="#start">시작</a>
+    <a href="#traps">함정</a><a href="https://github.com/kimsh-1/codex-fleet">GitHub</a>
+  </span>
+</div></nav>
+
+<header><div class="wrap">
+  <div class="eyebrow">Claude Code Skill · Codex 양산법</div>
+  <h1>Codex 워커를<br><span class="grad">함대처럼 띄운다</span></h1>
+  <p class="sub">
+    <code>codex exec</code> 프로세스를 백그라운드로 N개 동시에 띄워서,
+    이미지든 임의 작업이든 나눠 대량으로 뽑는다.
+    처리량은 스폰 개수 하나로 조절한다.
+  </p>
+  <div class="cta">
+    <a class="btn primary" href="https://github.com/kimsh-1/codex-fleet">GitHub에서 보기 →</a>
+    <a class="btn ghost" href="#start">빠른 시작</a>
+  </div>
+</div></header>
+
+<!-- THE "VIDEO": web-native animated hero -->
+<div class="stage-sec" id="how"><div class="wrap">
+  <div class="stage-card">
+    <div class="stage-top">
+      <span class="dot" style="background:#f0626c"></span>
+      <span class="dot" style="background:#f0c674"></span>
+      <span class="dot" style="background:#37e0d8"></span>
+      <span class="stage-title">codex-fleet — 스폰 오케스트레이션 라이브</span>
+    </div>
+    <canvas id="stage" width="1280" height="560" aria-label="오케스트레이터가 codex 워커를 병렬 스폰해 작업을 처리하는 애니메이션"></canvas>
+    <div class="controls">
+      <label>PARALLEL</label>
+      <input id="par" type="range" min="1" max="8" value="4" />
+      <span class="pill">워커 <b id="parVal">4</b></span>
+      <span class="pill gold">처리량 ~<b id="rate">0.0</b>/s</span>
+      <span class="pill">완료 <b id="done">0</b></span>
+    </div>
+  </div>
+</div></div>
+
+<section id="skills"><div class="wrap">
+  <h2>스킬 2종</h2>
+  <p class="lead">골격은 같다. <code>codex exec</code>를 워커 풀로 묶어 <code>PARALLEL</code> 하나로 처리량을 정한다. 차이는 결과를 어떻게 회수하느냐다.</p>
+  <!-- humanized copy applied -->
+
+  <div class="grid2">
+    <div class="skill">
+      <h3><span class="tag">/</span>codex-imagegen</h3>
+      <p>gpt-image-2로 이미지를 대량생성한다. codex가 세션 폴더에 떨군 PNG를 회수하는데, 병렬일 때 워커끼리 결과를 채가는 레이스가 있어 <code>claimed</code> 락으로 1:1을 보장한다.</p>
+      <div class="meta">회수: ~/.codex/generated_images → 락 기반 회수 · 250 IPM</div>
+    </div>
+    <div class="skill">
+      <h3><span class="tag">/</span>codex-spawn</h3>
+      <p>코드 수정·분석·요약·리뷰 등 임의 작업을 나눠 돌린다. 결과를 <code>-o</code>로 작업별 파일에 직접 받으므로 회수 레이스가 없다. <code>--output-schema</code>로 구조화 출력도 받는다.</p>
+      <div class="meta">회수: -o output-last-message → 파일 직행 · 격리 디렉토리/worktree</div>
+    </div>
+  </div>
+</div></section>
+
+<section id="start"><div class="wrap">
+  <h2>빠른 시작</h2>
+  <p class="lead">Codex CLI 로그인 상태면 바로 된다. 스폰 수는 3~6에서 시작해 머신 부하와 429를 보며 올린다.</p>
+  <pre><span class="c"># 임의 작업 — tasks.jsonl = 한 줄당 {id, prompt, cwd?, schema?}</span>
+<span class="k">PARALLEL</span>=4 <span class="k">TASKS</span>=examples/tasks.jsonl <span class="k">SANDBOX</span>=read-only \
+  python3 runners/codex_spawn_runner.py
+
+<span class="c"># 이미지 — manifest.jsonl = 한 줄당 {id, prompt, ar, size, output_path}</span>
+<span class="k">PARALLEL</span>=3 <span class="k">PROMPTS</span>=examples/manifest.jsonl <span class="k">OUTDIR</span>=./out \
+  python3 runners/codex_imagegen_runner.py</pre>
+</div></section>
+
+<section id="traps"><div class="wrap">
+  <h2>함정 모음</h2>
+  <p class="lead">전부 한 번씩 밟아보고 정리한 것들이다.</p>
+  <ul class="traps">
+    <li><b>회수 레이스</b> — <span>이미지 병렬에서 워커 A의 회수가 워커 B의 PNG를 채간다. <code>claimed</code> 집합 + 락으로 막는다.</span></li>
+    <li><b>자살 pkill</b> — <span><code>pkill -f codex_spawn_runner</code>는 그 명령을 실행한 셸 자신을 죽인다. 프로세스를 한정해서 죽인다.</span></li>
+    <li><b>모더레이션 거부</b> — <span>우회하지 말고 표현을 톤다운하면 대개 통과한다.</span></li>
+    <li><b>파일 충돌</b> — <span>수정 작업을 격리 없이 같은 repo에 병렬로 돌리지 않는다. 디렉토리나 worktree로 나눈다.</span></li>
+  </ul>
+</div></section>
+
+<footer><div class="wrap">
+  <span class="brand">codex<b style="color:var(--cyan)">·</b>fleet</span>
+  MIT License · <a href="https://github.com/kimsh-1/codex-fleet">github.com/kimsh-1/codex-fleet</a>
+</div></footer>
+
+<script>
+(function(){
+  const cv=document.getElementById('stage'), ctx=cv.getContext('2d');
+  const W=cv.width, H=cv.height;
+  const parEl=document.getElementById('par'), parVal=document.getElementById('parVal');
+  const rateEl=document.getElementById('rate'), doneEl=document.getElementById('done');
+  const C={bg:'#0a0e1a',line:'#1e2740',ink:'#e8edf7',dim:'#8a97b5',cyan:'#37e0d8',gold:'#f0c674',rose:'#f07a8c'};
+
+  let PAR=+parEl.value;
+  parEl.addEventListener('input',()=>{PAR=+parEl.value;parVal.textContent=PAR;});
+
+  const LANE_MAX=8;
+  const orchX=170, orchY=H/2, orchW=150, orchH=92;
+  const workX=720, resX=1110;
+  function laneY(i,n){const gap=Math.min(58,(H-90)/n);const top=H/2-(n-1)*gap/2;return top+i*gap;}
+
+  // workers: each lane has state {busy, t, taskColor}
+  const lanes=Array.from({length:LANE_MAX},()=>({busy:false,t:0,dur:1,hue:0,fromY:0}));
+  let tasks=[]; // {x,y,tx,ty,p,hue,lane}
+  let outputs=[]; // {x,y,born,hue}
+  let done=0, spawnAcc=0, lastSpawn=0;
+  let doneTimes=[];
+  const palette=[C.cyan,C.gold,C.rose,'#7ee0a8','#9ab4ff'];
+
+  function rr(x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);
+    ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();}
+
+  let prev=performance.now();
+  function frame(now){
+    const dt=Math.min(0.05,(now-prev)/1000); prev=now;
+
+    // spawn tasks from orchestrator toward free lanes
+    spawnAcc+=dt;
+    const spawnEvery=0.5; // try assign frequently
+    if(spawnAcc>spawnEvery){
+      spawnAcc=0;
+      for(let i=0;i<PAR;i++){
+        if(!lanes[i].busy && !tasks.some(t=>t.lane===i)){
+          const hue=palette[(done+i)%palette.length];
+          tasks.push({x:orchX+orchW/2,y:orchY,tx:workX,ty:laneY(i,PAR),p:0,hue,lane:i});
+        }
+      }
+    }
+
+    // advance tasks
+    tasks.forEach(t=>{t.p+=dt*1.6; t.x=lerp(orchX+orchW/2,t.tx,ease(t.p)); t.y=lerp(orchY,t.ty,ease(t.p));});
+    tasks=tasks.filter(t=>{
+      if(t.p>=1){const L=lanes[t.lane]; L.busy=true;L.t=0;L.dur=1.1+Math.random()*1.3;L.hue=t.hue;L.fromY=t.ty;return false;}
+      return true;
+    });
+
+    // process lanes
+    for(let i=0;i<LANE_MAX;i++){
+      const L=lanes[i];
+      if(L.busy){L.t+=dt;
+        if(L.t>=L.dur){L.busy=false; outputs.push({x:workX,y:L.fromY,tx:resX,p:0,hue:L.hue}); }
+      }
+    }
+    // advance outputs to results column
+    outputs.forEach(o=>{o.p=(o.p||0)+dt*1.4;o.x=lerp(workX,resX,ease(o.p));});
+    outputs=outputs.filter(o=>{
+      if(o.p>=1){done++;doneTimes.push(now);return false;}
+      return true;
+    });
+
+    // throughput over last 3s
+    doneTimes=doneTimes.filter(t=>now-t<3000);
+    const rate=doneTimes.length/3;
+    rateEl.textContent=rate.toFixed(1); doneEl.textContent=done;
+
+    draw(now);
+    requestAnimationFrame(frame);
+  }
+  function lerp(a,b,t){return a+(b-a)*t;}
+  function ease(t){t=Math.max(0,Math.min(1,t));return t*t*(3-2*t);}
+
+  function draw(now){
+    ctx.clearRect(0,0,W,H);
+    // result tray
+    ctx.fillStyle='rgba(55,224,216,.04)';rr(resX-26,40,150,H-80,14);ctx.fill();
+    ctx.fillStyle=C.dim;ctx.font='600 15px ui-monospace,monospace';ctx.textAlign='center';
+    ctx.fillText('results/',resX+50,30);
+    ctx.fillText('codex exec ×N',workX+24,30);
+
+    // connection guides
+    for(let i=0;i<PAR;i++){
+      const y=laneY(i,PAR);
+      ctx.strokeStyle=C.line;ctx.lineWidth=1.5;
+      ctx.beginPath();ctx.moveTo(orchX+orchW,orchY);ctx.lineTo(workX,y);ctx.stroke();
+    }
+
+    // orchestrator
+    ctx.fillStyle='#0e1628';
+    rr(orchX,orchY-orchH/2,orchW,orchH,16);ctx.fill();
+    ctx.strokeStyle=C.cyan;ctx.lineWidth=1.5;rr(orchX,orchY-orchH/2,orchW,orchH,16);ctx.stroke();
+    ctx.fillStyle=C.ink;ctx.font='700 17px ui-monospace,monospace';ctx.textAlign='center';
+    ctx.fillText('codex-fleet',orchX+orchW/2,orchY-6);
+    ctx.fillStyle=C.dim;ctx.font='12px ui-monospace,monospace';
+    ctx.fillText('orchestrator',orchX+orchW/2,orchY+15);
+
+    // workers
+    for(let i=0;i<PAR;i++){
+      const y=laneY(i,PAR),L=lanes[i];
+      const pulse=L.busy?0.5+0.5*Math.sin(now/120+i):0.25;
+      ctx.fillStyle='#0e1628';rr(workX,y-16,118,32,9);ctx.fill();
+      ctx.strokeStyle=L.busy?withA(L.hue,.9):C.line;ctx.lineWidth=L.busy?2:1.2;
+      rr(workX,y-16,118,32,9);ctx.stroke();
+      // progress bar inside worker
+      if(L.busy){ctx.fillStyle=withA(L.hue,.25);rr(workX+4,y-12,(110)*(L.t/L.dur),24,6);ctx.fill();}
+      ctx.fillStyle=L.busy?C.ink:C.dim;ctx.font='12px ui-monospace,monospace';ctx.textAlign='left';
+      ctx.fillText('w'+(i+1),workX+12,y+4);
+      ctx.globalAlpha=pulse;ctx.fillStyle=L.busy?L.hue:C.dim;
+      ctx.beginPath();ctx.arc(workX+100,y,4,0,7);ctx.fill();ctx.globalAlpha=1;
+    }
+
+    // tasks in flight
+    tasks.forEach(t=>{ctx.fillStyle=t.hue;rr(t.x-7,t.y-7,14,14,4);ctx.fill();
+      ctx.globalAlpha=.25;rr(t.x-11,t.y-11,22,22,6);ctx.fillStyle=t.hue;ctx.fill();ctx.globalAlpha=1;});
+
+    // outputs in flight
+    outputs.forEach(o=>{ctx.fillStyle=withA(o.hue,.9);rr(o.x-8,o.y-8,16,16,4);ctx.fill();});
+
+    // settled result tiles (stacked)
+    const cols=3, tile=30, gap=8;
+    for(let k=0;k<Math.min(done,30);k++){
+      const cx=resX-14+(k%cols)*(tile+gap), cy=70+Math.floor(k/cols)*(tile+gap);
+      ctx.fillStyle=withA(palette[k%palette.length],.85);rr(cx,cy,tile,tile,6);ctx.fill();
+    }
+    if(done>30){ctx.fillStyle=C.dim;ctx.font='12px ui-monospace,monospace';ctx.textAlign='left';
+      ctx.fillText('+'+(done-30),resX-10,70+10*(tile+gap));}
+  }
+  function withA(hex,a){const h=hex.replace('#','');const n=parseInt(h.length===3?h.split('').map(c=>c+c).join(''):h,16);
+    return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`;}
+
+  // responsive: scale canvas backing store handled by CSS width; keep crisp
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

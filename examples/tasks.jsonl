@@ -1,0 +1,3 @@
+{"id": "summarize-readme", "cwd": ".", "prompt": "README.md를 3줄로 요약해라. 코드는 수정하지 마라."}
+{"id": "list-todos", "cwd": ".", "prompt": "이 디렉토리의 소스에서 TODO/FIXME 주석을 모두 찾아 파일:라인과 함께 나열해라."}
+{"id": "audit-runner", "cwd": ".", "prompt": "runners/codex_spawn_runner.py의 잠재적 버그나 레이스 컨디션을 점검해라.", "schema": {"type": "object", "properties": {"findings": {"type": "array", "items": {"type": "object", "properties": {"severity": {"type": "string"}, "line": {"type": "integer"}, "note": {"type": "string"}}}}}, "required": ["findings"]}}
