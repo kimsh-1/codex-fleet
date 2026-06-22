@@ -1,29 +1,22 @@
 ---
 name: codex-imagegen
 version: "1.0.0"
-description: 순수 codex CLI(`codex exec`)를 백그라운드로 N개 병렬 스폰해서 gpt-image-2 이미지를 대량 생성하고, 떨어진 PNG를 레이스 없이 회수하는 오케스트레이션 스킬. HTTP 재구현(generateImage 직접호출) 방식이 아니라 "진짜 codex 프로세스를 여러 개 띄워" 스폰 수로 처리량을 제어하는 패턴. 트리거 — "코덱스로 이미지 대량생성", "codex exec 병렬 스폰", "이미지 배치 러너", "스폰 수 제어해서 이미지 뽑아", "$imagegen 배치", "프롬프트 jsonl로 이미지 N장", "codex 이미지 회수/move". 후속 — "동시성 올려/내려", "실패분만 재시도", "거부된 컷 완화", "resume" 도 이 스킬. ※ HTTP-인프로세스 방식(chatgpt.com/backend-api 직접호출, image-platform/imagegen.ts)을 원하면 그건 별개 경로 — 아래 §0 비교 참조.
+description: codex CLI(`codex exec`)를 백그라운드로 N개 병렬 스폰해서 gpt-image-2 이미지를 대량 생성하고, 떨어진 PNG를 레이스 없이 회수하는 CLI 양산 스킬. 단일 1장은 codex 직접, 이 스킬은 수십~수백 장을 스폰 수(PARALLEL)로 나눠 뽑을 때. 트리거 — "코덱스로 이미지 대량생성", "codex exec 병렬 스폰", "이미지 배치 러너", "스폰 수 제어해서 이미지 뽑아", "$imagegen 배치", "프롬프트 jsonl로 이미지 N장", "codex 이미지 회수/move". 후속 — "동시성 올려/내려", "실패분만 재시도", "거부된 컷 완화", "resume" 도 이 스킬.
 ---
 
 # Codex Image-Gen — CLI 병렬 스폰 오케스트레이터
 
 `codex exec`(비대화형 codex CLI)를 **백그라운드 프로세스로 N개 동시에 띄워서** 이미지를 뽑고, codex가 자기 세션 폴더에 떨군 PNG를 **레이스 없이 목적지로 회수**하는 패턴. 스폰 개수(`PARALLEL`) 하나로 처리량을 제어한다.
 
-## §0. 두 가지 경로 — 헷갈리지 말 것
+## §0. 무엇인가
 
-이미지 생성에 우리가 쓰는 경로는 **두 개이고 서로 다른 물건**이다.
+`codex` CLI를 **그대로 여러 개 띄워** 이미지를 양산하는 방식이다. 단일 이미지 한 장은 그냥 `codex`를 직접 쓰면 되고, 이 스킬은 **수십~수백 장을 나눠 뽑을 때** 쓴다.
 
-| | **A. HTTP 인프로세스 풀** | **B. CLI 병렬 스폰 (이 스킬)** |
-|---|---|---|
-| 호출 | `generateImage()`가 `chatgpt.com/backend-api/codex/responses`에 직접 fetch | `codex exec "..."` 프로세스를 `subprocess`로 실행 |
-| 동시성 | node 한 프로세스 안의 **async 풀** (RateLimiter) | **OS 프로세스 N개**를 띄움 (ThreadPool/`xargs -P`) |
-| 코드 | `image-platform/forge-run.mjs`, `src/lib/codex/imagegen.ts` | `08_codex_orchestration/batch_runner_parallel.py` |
-| 출력 | base64를 SSE로 받아 직접 `writeFile` | codex가 `~/.codex/generated_images/`에 떨굼 → 회수 필요 |
-| 인증 | `~/.codex/auth.json` 토큰을 코드가 직접 주입 | `codex` CLI 로그인 상태를 그대로 사용 |
-| "순수 코덱스" | ✗ HTTP 재구현 | ✔ 진짜 codex 프로세스 |
+- 동시성 = **OS 프로세스 N개**를 띄움 (`ThreadPool` / `xargs -P`). `PARALLEL` 하나로 처리량 제어.
+- 인증 = `codex` CLI 로그인 상태를 그대로 사용 (토큰 주입 불필요).
+- 출력 = codex가 `~/.codex/generated_images/`에 떨군 PNG를 목적지로 회수.
 
-**이 스킬은 B다.** "codex CLI 여러 개 백그라운드 스폰"이 B. A를 원하면 `image-platform`의 `forge-run.mjs`를 보고 이 스킬을 쓰지 말 것.
-
-> ⚠️ A 방식(HTTP 재구현)으로 **자동 대량 생성**을 돌리면 OpenAI가 세션을 끊은 전례가 있다(`refresh_token_invalidated`, 복구=`codex login` 재로그인). B(`codex exec`)는 공식 사용 경로라 상대적으로 안전하지만, **한도는 어차피 ChatGPT 계정 단위**다. 스폰을 늘려도 계정 한도(250 IPM)는 복제되지 않는다.
+> ⚠️ **한도는 ChatGPT 계정 단위**다. 스폰을 늘려도 계정 한도(250 IPM)는 복제되지 않는다. 과한 자동 대량 호출은 세션 무효화(`refresh_token_invalidated`, 복구=`codex login` 재로그인) 위험 — `codex exec`는 공식 경로라 상대적으로 안전하지만 무한 스폰은 금물.
 
 ## §1. 핵심 메커니즘 — codex exec 한 번 = 이미지 한 장
 
@@ -63,7 +56,7 @@ ls -lt ~/.codex/generated_images/**/ig_*.png | head -3
 | API Key 직접 | ~4 | 250 IPM ÷ ~15s/장 여유 |
 
 - **하드캡 250 IPM**(Images Per Minute, gpt-image-2 공식). 초과 시 **429**.
-- CLI 스폰은 프로세스당 풀 codex라 **메모리/CPU가 진짜 병목**이 될 수 있다(HTTP 풀과 다른 점). conc 20 같은 고동시성은 A(HTTP)에서나 했지, B(CLI 스폰)에선 머신이 못 버틴다 — Pro 기준 3~6에서 시작.
+- CLI 스폰은 프로세스당 풀 codex라 **메모리/CPU가 진짜 병목**이 될 수 있다. 고동시성을 무작정 올리면 토큰 한도 전에 머신이 먼저 죽는다 — Pro 기준 3~6에서 시작해 부하 보며 상향.
 - 429/throttle가 안 나오면 천천히 올려보되, **램프업 구간(버스트)에서 측정하면 과소평가**된다. 정상상태에서 rate 측정.
 
 ## §3. 회수(move) — 여기에 레이스 함정이 있다
